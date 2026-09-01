@@ -1,0 +1,24 @@
+[project]
+name = "agentqa"
+version = "0.1.0"
+description = "LLM-powered API testing and quality analysis agent"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "httpx>=0.28",
+    "pydantic>=2.10",
+    "pyyaml>=6.0",
+    "uvicorn>=0.34",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.3",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["backend"]
+testpaths = [
+    "backend/tests/agentqa",
+    "backend/tests/agentqa_demo",
+]
