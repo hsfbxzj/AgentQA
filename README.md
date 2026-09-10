@@ -141,7 +141,8 @@ backend/
 │   ├── models.py            # Pydantic 数据契约
 │   └── tools.py             # 三个 Agent 工具与 Artifact 交付
 ├── agentqa_demo/            # 固定行为的本地验收 API
-└── tests/                   # 核心引擎与验收 API 测试
+├── packages/harness/        # Agent 运行时、工具和中间件
+└── tests/                   # 后端、AgentQA 与验收 API 测试
 
 frontend/
 ├── src/components/workspace/messages/
@@ -150,45 +151,57 @@ frontend/
 ├── src/core/messages/utils.ts
 └── tests/                   # Artifact 提取单元测试与浏览器验收
 
+docker/                                  # 前端、网关和验收 API 容器编排
+scripts/                                 # 安装、启动、停止与环境检查脚本
 skills/public/agentqa-api-testing/       # Agent 工作流与审批规范
 docs/agentqa-regression.md               # 回归数据模型和兼容规则
-integration/                             # 运行时接入差异与工具集成测试
 ```
 
-## 快速验证
+## 快速开始
 
-环境要求：Python 3.12 或更高版本。
+推荐使用 Docker Desktop 与 Git Bash 运行完整环境。本地开发需要 Python 3.12+、uv、Node.js 和 pnpm。
 
 ```bash
 git clone https://github.com/hsfbxzj/AgentQA.git
 cd AgentQA
-python -m venv .venv
+cp .env.example .env
+cp config.example.yaml config.yaml
 ```
 
-Windows PowerShell：
+在 `.env` 中设置模型密钥，并在 `config.yaml` 的 `models` 中启用所需模型。密钥通过环境变量引用，不写入 YAML。
 
-```powershell
-.\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[test]"
-pytest -q
-```
-
-Linux/macOS：
+启动完整环境：
 
 ```bash
-source .venv/bin/activate
-python -m pip install -e ".[test]"
-pytest -q
+./scripts/docker.sh start
 ```
 
-启动内置验收 API：
+- AgentQA 工作区：<http://localhost:2026>
+- 验收 API Swagger：<http://localhost:8003/docs>
+- 验收 API OpenAPI：<http://localhost:8003/openapi.json>
+
+停止服务：
 
 ```bash
-uvicorn agentqa_demo.app:app --app-dir backend --host 127.0.0.1 --port 8003
+./scripts/docker.sh stop
 ```
 
-- Swagger UI：<http://127.0.0.1:8003/docs>
-- OpenAPI 文档：<http://127.0.0.1:8003/openapi.json>
+只运行 AgentQA 后端测试：
+
+```bash
+cd backend
+uv sync
+uv run pytest tests/agentqa tests/agentqa_demo -q
+```
+
+运行前端测试和类型检查：
+
+```bash
+cd frontend
+pnpm install
+pnpm test
+pnpm typecheck
+```
 
 验收 API 提供 5 个业务接口，并固定保留 3 个契约缺陷。正确执行结果为 `5 cases / 2 passed / 3 failed`，三条失败分别覆盖响应字段类型、无效登录状态码、删除接口状态码与响应体规则。
 
@@ -196,8 +209,7 @@ uvicorn agentqa_demo.app:app --app-dir backend --host 127.0.0.1 --port 8003
 
 当前版本已完成以下自动化验证：
 
-- 公开仓库核心测试：`47 passed, 3 xfailed`；
-- 完整 AgentQA 后端测试：`55 passed, 3 xfailed`；
+- AgentQA 后端测试：`55 passed, 3 xfailed`；
 - 前端单元测试：`341 passed`；
 - TypeScript 类型检查、Ruff 和 ESLint 检查通过；
 - 浏览器端历史报告与回归报告下载场景通过；

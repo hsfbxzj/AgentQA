@@ -1,29 +1,62 @@
+# DeerFlow docker image cache
+docker/.cache/
+# oh-my-claudecode state
+.omc/
+# OS generated files
+.DS_Store
+*.local
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Python cache
 __pycache__/
-*.py[cod]
-.pytest_cache/
-.coverage
-coverage.xml
-htmlcov/
-.venv/
+*.pyc
+*.pyo
+
+# Virtual environments
+.venv
 venv/
 
+# Environment variables
 .env
-.env.*
-!.env.example
+
+# Configuration files
 config.yaml
+mcp_config.json
 extensions_config.json
 
-logs/
-outputs/
-agentqa-report*.md
-agentqa-report*.json
-
-node_modules/
-.next/
-dist/
-build/
-
+# IDE
 .idea/
 .vscode/
-.DS_Store
-Thumbs.db
+
+# Coverage report
+coverage.xml
+coverage/
+.deer-flow/
+.claude/
+skills/custom/*
+logs/
+log/
+debug.log
+
+# Local git hooks (keep only on this machine, do not push)
+.githooks/
+
+# pnpm
+.pnpm-store
+sandbox_image_cache.tar
+
+# ignore the legacy `web` folder
+web/
+
+# Deployment artifacts
+backend/Dockerfile.langgraph
+config.yaml.bak
+.playwright-mcp
+/frontend/test-results/
+/frontend/playwright-report/
+.gstack/
+.worktrees
