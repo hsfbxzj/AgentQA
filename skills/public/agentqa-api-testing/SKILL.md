@@ -4,10 +4,13 @@ description: >-
   Test a local REST API from an OpenAPI 3.x JSON/YAML document. Use when the
   user asks to create API test cases, review an API test plan, run contract
   tests, discover response-schema or status-code defects, or generate an
-  AgentQA report. The MVP is restricted to allowlisted local targets.
+  AgentQA report, compare before/after reports, or identify fixed, newly failing,
+  and unresolved cases in a regression run. Network access is restricted to
+  allowlisted local targets.
 allowed-tools:
   - agentqa_create_test_plan
   - agentqa_execute_test_plan
+  - agentqa_compare_test_reports
   - ask_clarification
   - read_file
 ---
@@ -19,7 +22,7 @@ Follow the phases in order. Never skip the approval gate.
 
 ## Phase 1: Obtain the OpenAPI document
 
-- For the built-in teaching target, use these defaults:
+- For the built-in validation target, use these defaults:
   - OpenAPI: `http://agentqa-demo-api:8000/openapi.json`
   - Base URL: `http://agentqa-demo-api:8000`
 - For an uploaded JSON/YAML document, use `read_file`, then pass its text as
@@ -66,20 +69,52 @@ Summarize total, passed, and failed counts. For every failure, state the
 operation and exact assertion evidence. Do not invent a cause that is not in
 the report.
 
-`agentqa_execute_test_plan` deterministically saves and presents both outputs
+`agentqa_execute_test_plan` deterministically saves and presents these outputs
 in the same tool call:
 
-- `agentqa-report.md` from `markdown_report`;
-- `agentqa-report.json` from `report`.
+- `agentqa/runs/<run_id>/agentqa-report.md` from `markdown_report`;
+- `agentqa/runs/<run_id>/agentqa-report.json` from `report`;
+- `agentqa/runs/<run_id>/agentqa-plan.json` containing the exact reviewed plan.
 
-The tool returns both virtual paths in `artifacts`; do not call `write_file` or
+All paths are relative to `/mnt/user-data/outputs/`. Each run has immutable
+archive paths. The root `agentqa-report.md` and `agentqa-report.json` are latest
+aliases only; do not use these aliases to identify an earlier baseline.
+
+The tool returns the actual virtual paths in `artifacts`; do not call `write_file` or
 `present_files`, and do not ask the user to request downloads in another turn.
-Verify that both artifact paths are present in the tool result before claiming
+Verify that the artifact paths are present in the tool result before claiming
 that the reports are downloadable.
 
-## Built-in demo acceptance target
+## Regression comparison
 
-The teaching Demo API has five operations and three intentional defects. A
+1. Identify the baseline by its run ID and archived JSON report. Read uploaded
+   or archived reports using `read_file`; retain complete JSON without rewriting
+   counts, fingerprints, snapshots, or failure evidence.
+2. For a new post-fix run, reuse the archived `agentqa-plan.json` (also available
+   as `report.plan`). Show the exact plan and target and obtain explicit execution
+   approval if the user has not already approved that exact rerun. Then use
+   `agentqa_execute_test_plan`. Avoid regenerating expectations from a changed
+   specification when the intent is to verify the original contract.
+3. Call `agentqa_compare_test_reports` with `baseline_report_json` and
+   `current_report_json`. Each input accepts a report object serialized as JSON
+   or the full execution tool JSON containing `report`. This step only compares
+   recorded results and needs no HTTP execution approval.
+4. Explain the deterministic categories: failure → pass is fixed; pass → failure
+   is a new defect; failure → failure is unresolved; pass → pass is persistent pass.
+   These are case counts, not inferred independent root causes. Show evidence
+   changes within unresolved cases without asserting that the root cause is the same.
+5. Separately disclose added/missing cases, changed test conditions, network
+   execution errors, and any returned warnings. Never call an untested case fixed.
+   New-version reports match request/assertion fingerprints independent of case
+   numbering. Legacy reports require identical plan IDs and unambiguous case IDs;
+   different APIs/targets are rejected. Do not bypass validation by editing JSON.
+6. Present the returned `agentqa/comparisons/<comparison_id>/agentqa-regression.md`
+   and `.json` artifacts immediately. If both reports already exist, go directly
+   to comparison without rerunning tests or asking for execution approval.
+
+## Built-in validation target
+
+The validation API has five operations and three intentional defects. A
 correct run should produce five results: two passed and three failed. The
 failures should expose a response type mismatch, an invalid-login status-code
 mismatch, and a delete status/body mismatch.

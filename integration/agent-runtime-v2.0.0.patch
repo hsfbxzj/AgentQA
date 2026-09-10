@@ -1,6 +1,5 @@
-warning: unable to access 'C:\Users\wangsen/.config/git/ignore': Permission denied
 diff --git a/config.example.yaml b/config.example.yaml
-index 24b65bb..9f07b4f 100644
+index 24b65bb..2cc635e 100644
 --- a/config.example.yaml
 +++ b/config.example.yaml
 @@ -494,6 +494,7 @@ tool_groups:
@@ -11,18 +10,21 @@ index 24b65bb..9f07b4f 100644
  
  # ============================================================================
  # Tools Configuration
-@@ -501,6 +502,15 @@ tool_groups:
+@@ -501,6 +502,18 @@ tool_groups:
  # Configure available tools for the agent to use
  
  tools:
 +  # AgentQA tools: create a reviewable OpenAPI test plan, then execute it only
-+  # after explicit user approval. The MVP network allowlist is local-only.
++  # after explicit user approval. The network allowlist is local-only.
 +  - name: agentqa_create_test_plan
 +    group: agentqa
 +    use: agentqa.tools:agentqa_create_test_plan_tool
 +  - name: agentqa_execute_test_plan
 +    group: agentqa
 +    use: agentqa.tools:agentqa_execute_test_plan_tool
++  - name: agentqa_compare_test_reports
++    group: agentqa
++    use: agentqa.tools:agentqa_compare_test_reports_tool
 +
    # Web search tool (uses DuckDuckGo, no API key required)
    - name: web_search
@@ -80,7 +82,7 @@ index 97cbbee..0aaf3b7 100644
        - ../.env
      extra_hosts:
 diff --git a/frontend/src/components/workspace/messages/message-list.tsx b/frontend/src/components/workspace/messages/message-list.tsx
-index 8134154..907c66a 100644
+index 8134154..68c8c6a 100644
 --- a/frontend/src/components/workspace/messages/message-list.tsx
 +++ b/frontend/src/components/workspace/messages/message-list.tsx
 @@ -14,6 +14,7 @@ import {
@@ -91,14 +93,14 @@ index 8134154..907c66a 100644
    extractContentFromMessage,
    extractPresentFilesFromMessage,
    extractTextFromMessage,
-@@ -41,6 +42,7 @@ import { CopyButton } from "../copy-button";
+@@ -40,6 +41,7 @@ import { ArtifactFileList } from "../artifacts/artifact-file-list";
+ import { CopyButton } from "../copy-button";
  import { StreamingIndicator } from "../streaming-indicator";
  
- import { MarkdownContent } from "./markdown-content";
 +import { AgentQAPlanCard } from "./agentqa-plan-card";
+ import { MarkdownContent } from "./markdown-content";
  import { MessageGroup } from "./message-group";
  import { MessageListItem } from "./message-list-item";
- import {
 @@ -316,6 +318,15 @@ export function MessageList({
                    )}
                </div>
@@ -115,8 +117,20 @@ index 8134154..907c66a 100644
            } else if (group.type === "assistant:clarification") {
              const message = group.messages[0];
              if (message && hasContent(message)) {
+@@ -338,7 +349,10 @@ export function MessageList({
+             const files: string[] = [];
+             for (const message of group.messages) {
+               if (hasPresentFiles(message)) {
+-                const presentFiles = extractPresentFilesFromMessage(message);
++                const presentFiles = extractPresentFilesFromMessage(
++                  message,
++                  group.messages,
++                );
+                 files.push(...presentFiles);
+               }
+             }
 diff --git a/frontend/src/core/messages/utils.ts b/frontend/src/core/messages/utils.ts
-index 3ced9d3..7503626 100644
+index 3ced9d3..5ebe729 100644
 --- a/frontend/src/core/messages/utils.ts
 +++ b/frontend/src/core/messages/utils.ts
 @@ -14,6 +14,8 @@ interface AssistantMessageGroup extends GenericMessageGroup<"assistant"> {}
@@ -162,21 +176,26 @@ index 3ced9d3..7503626 100644
          // Add to the preceding processing group to preserve tool-call association,
          // then also open a standalone clarification group for prominent display.
          lastOpenGroup()?.messages.push(message);
-@@ -432,7 +445,9 @@ export function hasToolCalls(message: Message) {
+@@ -432,7 +445,13 @@ export function hasToolCalls(message: Message) {
  export function hasPresentFiles(message: Message) {
    return (
      message.type === "ai" &&
 -    message.tool_calls?.some((toolCall) => toolCall.name === "present_files")
 +    message.tool_calls?.some((toolCall) =>
-+      ["present_files", "agentqa_execute_test_plan"].includes(toolCall.name),
++      [
++        "present_files",
++        "agentqa_execute_test_plan",
++        "agentqa_compare_test_reports",
++      ].includes(toolCall.name),
 +    )
    );
  }
  
-@@ -440,6 +455,74 @@ export function isClarificationToolMessage(message: Message) {
+@@ -440,7 +459,78 @@ export function isClarificationToolMessage(message: Message) {
    return message.type === "tool" && message.name === "ask_clarification";
  }
  
+-export function extractPresentFilesFromMessage(message: Message) {
 +export interface AgentQATestPlanCase {
 +  id: string;
 +  name: string;
@@ -245,21 +264,58 @@ index 3ced9d3..7503626 100644
 +  }
 +}
 +
- export function extractPresentFilesFromMessage(message: Message) {
++export function extractPresentFilesFromMessage(
++  message: Message,
++  results: Message[] = [],
++) {
    if (message.type !== "ai" || !hasPresentFiles(message)) {
      return [];
-@@ -451,6 +534,11 @@ export function extractPresentFilesFromMessage(message: Message) {
+   }
+@@ -451,9 +541,43 @@ export function extractPresentFilesFromMessage(message: Message) {
        Array.isArray(toolCall.args.filepaths)
      ) {
        files.push(...(toolCall.args.filepaths as string[]));
-+    } else if (toolCall.name === "agentqa_execute_test_plan") {
-+      files.push(
-+        "/mnt/user-data/outputs/agentqa-report.md",
-+        "/mnt/user-data/outputs/agentqa-report.json",
++    } else if (
++      ["agentqa_execute_test_plan", "agentqa_compare_test_reports"].includes(
++        toolCall.name,
++      )
++    ) {
++      const result = results.find(
++        (candidate) =>
++          candidate.type === "tool" &&
++          !!toolCall.id &&
++          candidate.tool_call_id === toolCall.id,
 +      );
++      if (!result) continue;
++      try {
++        const payload = JSON.parse(extractTextFromMessage(result)) as {
++          status?: unknown;
++          artifacts?: unknown;
++        };
++        if (
++          payload.status === "completed" &&
++          Array.isArray(payload.artifacts)
++        ) {
++          files.push(
++            ...payload.artifacts.filter(
++              (path): path is string =>
++                typeof path === "string" &&
++                path.startsWith("/mnt/user-data/outputs/") &&
++                !path.includes("\\") &&
++                !path.split("/").includes(".."),
++            ),
++          );
++        }
++      } catch {
++        // Incomplete/failed tool results must not advertise nonexistent reports.
++      }
      }
    }
-   return files;
+-  return files;
++  return [...new Set(files)];
+ }
+ 
+ export function hasSubagent(message: AIMessage) {
 diff --git a/scripts/docker.sh b/scripts/docker.sh
 index 8123d42..ddfd9f2 100755
 --- a/scripts/docker.sh

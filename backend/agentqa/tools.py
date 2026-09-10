@@ -6,6 +6,7 @@ import asyncio
 import json
 from pathlib import Path
 from typing import Annotated
+from uuid import uuid4
 
 import httpx
 from langchain.tools import InjectedToolCallId, tool
@@ -14,9 +15,10 @@ from langgraph.types import Command
 
 from agentqa.case_generator import create_test_plan
 from agentqa.executor import execute_test_plan
-from agentqa.models import TestPlan
+from agentqa.models import TestPlan, TestReport
 from agentqa.openapi_parser import parse_openapi_document
-from agentqa.reporter import report_as_json, report_as_markdown
+from agentqa.regression import compare_test_reports
+from agentqa.reporter import regression_as_json, regression_as_markdown, report_as_json, report_as_markdown
 from agentqa.security import validate_target_url
 from deerflow.tools.types import Runtime
 
@@ -25,10 +27,6 @@ DEFAULT_BASE_URL = "http://agentqa-demo-api:8000"
 MAX_SPEC_BYTES = 2 * 1024 * 1024
 REPORT_MARKDOWN_FILENAME = "agentqa-report.md"
 REPORT_JSON_FILENAME = "agentqa-report.json"
-REPORT_ARTIFACT_PATHS = [
-    f"/mnt/user-data/outputs/{REPORT_MARKDOWN_FILENAME}",
-    f"/mnt/user-data/outputs/{REPORT_JSON_FILENAME}",
-]
 
 
 async def _read_openapi_source(source: str) -> str:
@@ -39,7 +37,7 @@ async def _read_openapi_source(source: str) -> str:
         response = await client.get(source)
         response.raise_for_status()
     if len(response.content) > MAX_SPEC_BYTES:
-        raise ValueError("OpenAPI document exceeds the 2 MiB AgentQA MVP limit")
+        raise ValueError("OpenAPI document exceeds the 2 MiB AgentQA limit")
     return response.text
 
 
@@ -53,10 +51,23 @@ def _get_outputs_dir(runtime: Runtime) -> Path:
     return Path(outputs_path).expanduser().resolve()
 
 
-def _write_report_files(outputs_dir: Path, markdown_report: str, json_report: str) -> None:
-    outputs_dir.mkdir(parents=True, exist_ok=True)
-    (outputs_dir / REPORT_MARKDOWN_FILENAME).write_text(markdown_report, encoding="utf-8")
-    (outputs_dir / REPORT_JSON_FILENAME).write_text(json_report, encoding="utf-8")
+def _write_artifacts(outputs_dir: Path, relative_dir: str, files: dict[str, str], *, latest: bool = False) -> list[str]:
+    # relative_dir and filenames are generated internally, never report/user paths.
+    archive = outputs_dir / relative_dir
+    archive.mkdir(parents=True, exist_ok=False)
+    for filename, content in files.items():
+        (archive / filename).write_text(content, encoding="utf-8")
+    if latest:
+        for filename in (REPORT_MARKDOWN_FILENAME, REPORT_JSON_FILENAME):
+            temporary = outputs_dir / f".{filename}.{uuid4().hex}.tmp"
+            temporary.write_text(files[filename], encoding="utf-8")
+            temporary.replace(outputs_dir / filename)
+    return [f"/mnt/user-data/outputs/{relative_dir}/{filename}" for filename in files]
+
+
+def _report_command(tool_call_id: str, name: str, report: str, markdown: str, artifacts: list[str]) -> Command:
+    payload = json.dumps({"status": "completed", "report": json.loads(report), "markdown_report": markdown, "artifacts": artifacts}, ensure_ascii=False, indent=2)
+    return Command(update={"artifacts": artifacts, "messages": [ToolMessage(content=payload, tool_call_id=tool_call_id, name=name)]})
 
 
 @tool("agentqa_create_test_plan", parse_docstring=True)
@@ -103,25 +114,47 @@ async def agentqa_execute_test_plan_tool(
     decoded = json.loads(plan_json)
     plan_data = decoded.get("plan", decoded) if isinstance(decoded, dict) else decoded
     plan = TestPlan.model_validate(plan_data)
+    outputs_dir = _get_outputs_dir(runtime)
     report = await execute_test_plan(plan, approved=approved)
     json_report = report_as_json(report)
     markdown_report = report_as_markdown(report)
-    outputs_dir = _get_outputs_dir(runtime)
-    await asyncio.to_thread(_write_report_files, outputs_dir, markdown_report, json_report)
+    if report.run_id is None:
+        raise ValueError("Executed report is missing its run ID")
+    artifacts = await asyncio.to_thread(
+        _write_artifacts,
+        outputs_dir,
+        f"agentqa/runs/{report.run_id}",
+        {REPORT_MARKDOWN_FILENAME: markdown_report, REPORT_JSON_FILENAME: json_report, "agentqa-plan.json": plan.model_dump_json(indent=2)},
+        latest=True,
+    )
+    return _report_command(tool_call_id, "agentqa_execute_test_plan", json_report, markdown_report, artifacts)
 
-    payload = json.dumps(
-        {
-            "status": "completed",
-            "report": json.loads(json_report),
-            "markdown_report": markdown_report,
-            "artifacts": REPORT_ARTIFACT_PATHS,
-        },
-        ensure_ascii=False,
-        indent=2,
+
+@tool("agentqa_compare_test_reports", parse_docstring=True)
+async def agentqa_compare_test_reports_tool(
+    baseline_report_json: str,
+    current_report_json: str,
+    runtime: Runtime,
+    tool_call_id: Annotated[str, InjectedToolCallId],
+) -> Command:
+    """Compare recorded AgentQA runs and deliver regression reports without HTTP requests.
+
+    Args:
+        baseline_report_json: Before-fix report JSON, or the complete execution tool result containing report.
+        current_report_json: After-fix report JSON, or the complete execution tool result containing report.
+    """
+
+    def decode(source: str) -> TestReport:
+        data = json.loads(source)
+        return TestReport.model_validate(data.get("report", data) if isinstance(data, dict) else data)
+
+    comparison = compare_test_reports(decode(baseline_report_json), decode(current_report_json))
+    markdown = regression_as_markdown(comparison)
+    json_report = regression_as_json(comparison)
+    artifacts = await asyncio.to_thread(
+        _write_artifacts,
+        _get_outputs_dir(runtime),
+        f"agentqa/comparisons/{comparison.comparison_id}",
+        {"agentqa-regression.md": markdown, "agentqa-regression.json": json_report},
     )
-    return Command(
-        update={
-            "artifacts": REPORT_ARTIFACT_PATHS,
-            "messages": [ToolMessage(content=payload, tool_call_id=tool_call_id)],
-        }
-    )
+    return _report_command(tool_call_id, "agentqa_compare_test_reports", json_report, markdown, artifacts)

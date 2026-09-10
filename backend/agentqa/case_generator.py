@@ -11,6 +11,16 @@ from agentqa.models import ApiOperation, ApiParameter, ApiResponse, ParsedOpenAP
 AUTH_WORDS = ("login", "signin", "sign-in", "auth", "token")
 
 
+def case_fingerprint(case: TestCase) -> str:
+    """Identify request and assertion conditions independently of display IDs/order."""
+
+    conditions = case.model_dump(mode="json", exclude={"id", "name"})
+    conditions["method"] = case.method.upper()
+    conditions["expected_status_codes"] = sorted(set(case.expected_status_codes))
+    encoded = json.dumps(conditions, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
 def _sample_value(schema: dict[str, Any], name: str = "value") -> Any:
     if "example" in schema:
         return schema["example"]
@@ -125,9 +135,7 @@ def create_test_plan(specification: ParsedOpenAPI, base_url: str) -> TestPlan:
         "base_url": base_url.rstrip("/"),
         "cases": [case.model_dump(mode="json") for case in cases],
     }
-    digest = hashlib.sha256(
-        json.dumps(fingerprint_source, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    ).hexdigest()[:12]
+    digest = hashlib.sha256(json.dumps(fingerprint_source, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()[:12]
     return TestPlan(
         id=f"plan-{digest}",
         api_title=specification.title,

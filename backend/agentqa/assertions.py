@@ -71,9 +71,7 @@ def evaluate_response(case: TestCase, response: httpx.Response, elapsed_ms: floa
     failures: list[AssertionFailure] = []
     if response.status_code not in case.expected_status_codes:
         expected = "/".join(str(code) for code in case.expected_status_codes)
-        failures.append(
-            AssertionFailure(kind="status", message=f"expected status {expected}, got {response.status_code}")
-        )
+        failures.append(AssertionFailure(kind="status", message=f"expected status {expected}, got {response.status_code}"))
     if elapsed_ms > case.max_response_time_ms:
         failures.append(
             AssertionFailure(

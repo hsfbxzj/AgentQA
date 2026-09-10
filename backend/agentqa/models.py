@@ -95,6 +95,7 @@ class TestResult(StrictModel):
     """Observed result for one executed test case."""
 
     case_id: str
+    case_fingerprint: str | None = None
     name: str
     method: str
     path_template: str
@@ -109,6 +110,9 @@ class TestResult(StrictModel):
 class TestReport(StrictModel):
     """Machine-readable result of an approved AgentQA run."""
 
+    schema_version: Literal[1, 2] = 1
+    run_id: str | None = Field(default=None, pattern=r"^run-[a-f0-9]{32}$")
+    plan: TestPlan | None = None
     plan_id: str
     api_title: str
     base_url: str
@@ -117,3 +121,51 @@ class TestReport(StrictModel):
     passed: int
     failed: int
     results: list[TestResult]
+
+
+RegressionCategory = Literal["fixed", "new_defect", "unresolved", "persistent_pass", "added_case", "missing_case", "changed_case", "execution_error"]
+
+
+class RegressionItem(StrictModel):
+    """One matched pair, changed test, or coverage difference with evidence."""
+
+    category: RegressionCategory
+    before: TestResult | None = None
+    after: TestResult | None = None
+    evidence_changed: bool = False
+
+
+class RegressionSummary(StrictModel):
+    """Counts refer to cases, never inferred root-cause defects."""
+
+    comparable: int = 0
+    fixed: int = 0
+    new_defects: int = 0
+    unresolved: int = 0
+    persistent_passes: int = 0
+    added_cases: int = 0
+    missing_cases: int = 0
+    changed_cases: int = 0
+    execution_errors: int = 0
+
+
+class RunReference(StrictModel):
+    run_id: str | None
+    plan_id: str
+    generated_at: datetime
+    total: int
+    passed: int
+    failed: int
+
+
+class RegressionReport(StrictModel):
+    schema_version: Literal[1] = 1
+    comparison_id: str = Field(pattern=r"^comparison-[a-f0-9]{32}$")
+    generated_at: datetime
+    api_title: str
+    base_url: str
+    baseline: RunReference
+    current: RunReference
+    summary: RegressionSummary
+    items: list[RegressionItem]
+    warnings: list[str] = Field(default_factory=list)

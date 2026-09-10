@@ -6,10 +6,12 @@ from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any
 from urllib.parse import quote
+from uuid import uuid4
 
 import httpx
 
 from agentqa.assertions import evaluate_response
+from agentqa.case_generator import case_fingerprint
 from agentqa.models import AssertionFailure, TestPlan, TestReport, TestResult
 from agentqa.security import validate_request_path, validate_target_url
 
@@ -70,6 +72,7 @@ async def execute_test_plan(
             results.append(
                 TestResult(
                     case_id=case.id,
+                    case_fingerprint=case_fingerprint(case),
                     name=case.name,
                     method=case.method,
                     path_template=case.path_template,
@@ -87,6 +90,9 @@ async def execute_test_plan(
 
     passed = sum(result.passed for result in results)
     return TestReport(
+        schema_version=2,
+        run_id=f"run-{uuid4().hex}",
+        plan=plan.model_copy(deep=True),
         plan_id=plan.id,
         api_title=plan.api_title,
         base_url=plan.base_url,
